@@ -1,6 +1,6 @@
 {
   "name": "ai-interpreter",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Lingxun command DSL interpreter for TypeScript applications",
   "type": "module",
   "license": "MIT",
@@ -20,7 +20,11 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist", "README.md", "LICENSE"],
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "sideEffects": false,
   "scripts": {
     "build": "tsc -p tsconfig.json",

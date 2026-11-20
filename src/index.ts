@@ -15,6 +15,7 @@ export { createInterpreter } from './interpreter.js'
 export {
   CommandError,
   ParseError,
+  LlmError,
   type ArgValue,
   type CallNode,
   type ChainNode,
@@ -26,4 +27,11 @@ export {
   type EntityMeta,
   type StepResult,
   type ExecResult,
+  type ReasoningEffort,
+  type LlmConfig,
+  type LlmErrorKind,
+  type GenerateOptions,
+  type RunResult,
+  type Interpreter,
+  type LlmInterpreter,
 } from './types.js'

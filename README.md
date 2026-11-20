@@ -2,7 +2,7 @@
 
 ## 介绍
 
-`ai-interpreter` 是一个 TypeScript 命令解释器。应用把功能注册成命令，再传入 `demo.echo('hello')` 这样的命令字符串，解释器会校验参数、调用对应的处理函数并返回执行结果。命令字符串可以由程序直接提供，也可以由应用请求 LLM 生成。
+`ai-interpreter` 是一个 TypeScript 命令解释器。应用把功能注册成命令，再传入 `demo.echo('hello')` 这样的命令字符串，解释器会校验参数、调用对应的处理函数并返回执行结果。命令字符串可以由程序直接提供，也可以由解释器读取当前命令清单、请求 LLM 生成。
 
 ## 安装命令
 
@@ -66,7 +66,7 @@ node run.mjs 'demo.echo(123)'
 
 ### 配置 LLM 生成命令
 
-LLM 请求由应用发起。下面以 OpenAI 兼容的 Chat Completions 接口为例，在服务端用 `fetch` 获取命令文本，再交给同一个解释器。将以下配置写入应用的 `.env`，并将该文件加入 `.gitignore`。
+创建解释器时传入 LLM 服务配置，解释器会读取当前实例的命令清单、拼装系统提示词，并请求 OpenAI 兼容的 Chat Completions 接口，返回可执行命令字符串。将服务配置写入应用的 `.env`，并将该文件加入 `.gitignore`。
 
 ```dotenv
 LLM_BASE_URL=https://provider.example/v1
@@ -74,65 +74,71 @@ LLM_MODEL=your-model-id
 LLM_API_KEY=your-api-key
 ```
 
-`LLM_BASE_URL` 填供应商的 API 基址（包含供应商要求的版本路径），代码会追加 `/chat/completions`。`LLM_MODEL` 填供应商提供的模型 ID，`LLM_API_KEY` 会作为 Bearer 凭证发送。
+`LLM_BASE_URL` 填供应商的 API 基址（包含供应商要求的版本路径），请求时去掉末尾斜杠再追加 `/chat/completions`。`LLM_MODEL` 填供应商提供的模型 ID，`LLM_API_KEY` 会作为 Bearer 凭证发送。
 
-创建 `run-with-llm.mjs`。
+创建 `run-with-llm.mjs`，注册命令后用同一个实例生成并执行命令。
 
 ```js
-import { context, interpreter } from './commands.mjs'
+import { context } from './commands.mjs'
+import { createInterpreter } from 'ai-interpreter'
 
 const { LLM_BASE_URL: baseUrl, LLM_MODEL: model, LLM_API_KEY: apiKey } = process.env
 if (!baseUrl || !model || !apiKey) {
   throw new Error('请设置 LLM_BASE_URL、LLM_MODEL 和 LLM_API_KEY')
 }
 
-const allowedCommands = interpreter.listCommands()
-  .map(({ signature, description }) => `${signature} — ${description}`)
-  .join('\n')
-
-const response = await fetch(`${baseUrl.replace(/\/+$/, '')}/chat/completions`, {
-  method: 'POST',
-  headers: {
-    'Content-Type': 'application/json',
-    Authorization: `Bearer ${apiKey}`,
-  },
-  body: JSON.stringify({
-    model,
-    stream: false,
-    messages: [
-      {
-        role: 'system',
-        content: `只输出命令字符串，不要附加解释或 Markdown。可用命令：\n${allowedCommands}`,
-      },
-      { role: 'user', content: process.argv[2] ?? '请回显 hello' },
-    ],
-  }),
-  signal: AbortSignal.timeout(30_000),
+const interpreter = createInterpreter({
+  baseUrl,
+  apiKey,
+  model,
+  thinking: 'medium',
+  systemPrompt: '你是一个帮助用户操作应用的助手',
 })
 
-if (!response.ok) throw new Error(`LLM 请求失败（HTTP ${response.status}）`)
-const { choices } = await response.json()
-const source = choices?.[0]?.message?.content
-if (typeof source !== 'string' || !source.trim()) {
-  throw new Error('LLM 没有返回命令字符串')
-}
+interpreter.registerCommand({
+  name: 'demo.echo',
+  signature: "demo.echo('text')",
+  description: '回显传入的文本',
+  params: [{ name: 'text', type: 'string' }],
+  risk: 'low',
+  handler: ([text]) => text,
+})
 
-const result = await interpreter.executeCommands(source.trim(), context)
-console.log(result.ok, result.message)
-if (!result.ok) process.exitCode = 1
+const { source, result } = await interpreter.run(process.argv[2] ?? '请回显 hello', context)
+console.log(source) // demo.echo('hello')
+console.log(result.ok, result.message) // true hello
 ```
 
-```sh
-node --env-file=.env run-with-llm.mjs '请回显 hello'
+配置对象使用命名参数，字段如下：
+
+| 字段 | 要求 | 含义 |
+| --- | --- | --- |
+| `baseUrl` | 必填 | OpenAI 兼容 API 基址，例如 `https://provider.example/v1`。 |
+| `apiKey` | 必填 | 服务商密钥，放入 `Authorization: Bearer …`。 |
+| `model` | 必填 | 服务商要求的模型 ID，放入请求体的 `model`。 |
+| `thinking` | 选填 | 原样写入请求体的 `reasoning_effort`；不传时完全省略。 |
+| `systemPrompt` | 选填 | 替换默认角色文本「你是一个AI智能助手」；命令清单和输出规则总会追加。 |
+
+`thinking` 对齐 OpenAI Chat Completions 的 `reasoning_effort`，取值为 `none`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`，具体模型只支持其中一部分；不传时由服务商采用默认强度。其他服务商的私有推理参数（如 ARK 的 `thinking`、DashScope 的 `enable_thinking`）不会自动映射。
+
+创建时校验 `baseUrl`、`apiKey`、`model` 非空且 `baseUrl` 为有效的 HTTP(S) 地址，`thinking` 不在枚举内也会报错，错误类型为 `LlmError`（`kind: 'config'`）。请求失败、非 2xx 响应归入 `kind: 'request'`；空内容或非法 JSON 归入 `kind: 'response'`。
+
+只需要展示或审查命令而不执行时，使用 `generateCommands`：
+
+```js
+const source = await interpreter.generateCommands('请回显 hello')
 ```
 
-如果模型返回 `demo.echo('hello')`，终端会输出 `true hello`。接入应用时，按当前用户可用的能力注册命令，业务权限由处理函数校验。
+`generateCommands(input, { signal })` 和 `run(input, context, { signal })` 都支持通过 `AbortSignal` 取消请求。无参创建的 `createInterpreter()` 仍可继续用 `executeCommands` 直接执行命令字符串。
 
 ## API 介绍
 
 | API | 用途 |
 | --- | --- |
 | `createInterpreter()` | 创建拥有独立命令表的解释器。注册和执行使用同一个实例。 |
+| `createInterpreter(config)` | 传入 `LlmConfig` 创建带 LLM 能力的解释器。返回值额外提供 `generateCommands` 和 `run`，服务配置与命令表按实例隔离。 |
+| `interpreter.generateCommands(input, options?)` | 读取当前命令清单拼装系统提示词，请求 LLM 并返回命令字符串，不执行。`options.signal` 可取消请求。 |
+| `interpreter.run(input, context, options?)` | 先调用 `generateCommands`，再用同一实例执行，返回 `{ source, result }`。 |
 | `interpreter.registerCommand(spec)` | 接收 `CommandSpec`，注册根命令。相同 `name` 重复注册会抛错。 |
 | `interpreter.listCommands()` / `interpreter.getCommand(name)` | 列出已注册的根命令，或按名称查询单条命令。可将签名和说明用于生成提示词。 |
 | `interpreter.executeCommands(source, context)` | 解析并执行命令字符串，返回 `Promise<ExecResult>`。`CommandContext` 包含 `currentUserId` 和异步确认函数 `confirm`。 |
