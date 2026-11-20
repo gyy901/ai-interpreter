@@ -38,6 +38,9 @@ async function startLlmServer(reply) {
 const llmInterpreter = (baseUrl, overrides = {}) =>
   createInterpreter({ baseUrl, apiKey: 'test-key', model: 'test-model', ...overrides })
 
+/** 不请求 LLM、只验证注册与执行的实例；创建时仍需要一份合法配置 */
+const localInterpreter = () => llmInterpreter('https://provider.example/v1')
+
 const echoSpec = () => ({
   name: 'demo.echo',
   signature: "demo.echo('text')",
@@ -48,15 +51,15 @@ const echoSpec = () => ({
 })
 
 test('independent interpreters do not share registered commands', async () => {
-  const first = createInterpreter()
-  const second = createInterpreter()
+  const first = localInterpreter()
+  const second = localInterpreter()
   first.registerCommand(command('demo.echo', ([value]) => `echo:${value}`, [{ name: 'value', type: 'string' }]))
   assert.equal((await first.executeCommands("demo.echo('hi')", ctx())).message, 'echo:hi')
   assert.equal((await second.executeCommands("demo.echo('hi')", ctx())).ok, false)
 })
 
 test('high risk cancellation stops execution and following commands', async () => {
-  const interpreter = createInterpreter()
+  const interpreter = localInterpreter()
   let invoked = 0
   interpreter.registerCommand(command('demo.write', () => { invoked++; return 'written' }, [], 'high'))
   const result = await interpreter.executeCommands('demo.write(); demo.write()', ctx(false))
@@ -66,7 +69,7 @@ test('high risk cancellation stops execution and following commands', async () =
 })
 
 test('chained calls require registered own methods', async () => {
-  const interpreter = createInterpreter()
+  const interpreter = localInterpreter()
   interpreter.registerCommand(command('demo.entity', () => ({
     __kind: 'demo', __label: 'item', greet: () => 'hello',
   })))
@@ -80,7 +83,7 @@ test('chained calls require registered own methods', async () => {
 })
 
 test('object arguments are validated and special keys stay data', async () => {
-  const interpreter = createInterpreter()
+  const interpreter = localInterpreter()
   interpreter.registerCommand(command('demo.inspect', ([value]) => Object.keys(value).join(','), [{ name: 'value', type: 'object' }]))
   const bad = await interpreter.executeCommands('demo.inspect(123)', ctx())
   assert.equal(bad.ok, false)
@@ -94,6 +97,7 @@ test('llm config is validated at creation time', () => {
   const config = { baseUrl: 'https://provider.example/v1', apiKey: 'key', model: 'model' }
   const isConfigError = (err) => err instanceof LlmError && err.kind === 'config'
 
+  assert.throws(() => createInterpreter(), isConfigError, '必须传入 LLM 配置')
   assert.throws(() => createInterpreter({ ...config, baseUrl: '' }), isConfigError)
   assert.throws(() => createInterpreter({ ...config, apiKey: '  ' }), isConfigError)
   assert.throws(() => createInterpreter({ ...config, model: '' }), isConfigError)

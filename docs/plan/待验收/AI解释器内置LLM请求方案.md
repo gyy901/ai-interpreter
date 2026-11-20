@@ -2,6 +2,7 @@
 
 - 日期：2026-11-19
 - 更新：2026-11-20 创建参数改为命名参数（配置对象），`thinking` 取值对齐 OpenAI `reasoning_effort` 枚举
+- 更新：2026-11-20 取消无参创建与重载，`createInterpreter` 必须传入配置，实例始终带 LLM 能力
 - 状态：待验收（已实施并通过自测，见文末「自测记录」）
 - 范围：TypeScript 解释器及公开 npm 包 `ai-interpreter`
 
@@ -13,7 +14,7 @@
 
 ## 创建解释器
 
-计划保留无参创建方式，同时新增一个接收 LLM 配置对象的重载。参数改为命名参数：调用方只写需要的字段，选项顺序不再敏感，后续新增配置项也不会破坏既有调用。下面是待实现的 TypeScript 接口。
+`createInterpreter` 只有一个签名：必须接收 LLM 配置对象，返回的实例始终带 LLM 能力，不再提供无参创建方式，也不使用函数重载。参数使用命名参数：调用方只写需要的字段，选项顺序不再敏感，后续新增配置项也不会破坏既有调用。下面是 TypeScript 接口。
 
 ```ts
 /** OpenAI Chat Completions 的 reasoning_effort 取值 */
@@ -27,9 +28,19 @@ interface LlmConfig {
   systemPrompt?: string
 }
 
-function createInterpreter(): Interpreter
+function createInterpreter(config: LlmConfig): Interpreter
 
-function createInterpreter(config: LlmConfig): LlmInterpreter
+interface Interpreter {
+  registerCommand(spec: CommandSpec): void
+  registerEntityMethod(spec: EntityMethodSpec): void
+  getCommand(name: string): CommandSpec | undefined
+  getEntityMethod(kind: string, method: string): EntityMethodSpec | undefined
+  listCommands(): CommandSpec[]
+  listEntityMethods(): EntityMethodSpec[]
+  executeCommands(source: string, ctx: CommandContext): Promise<ExecResult>
+  generateCommands(input: string, options?: GenerateOptions): Promise<string>
+  run(input: string, ctx: CommandContext, options?: GenerateOptions): Promise<RunResult>
+}
 ```
 
 | 字段 | 要求 | 含义 |
@@ -40,7 +51,7 @@ function createInterpreter(config: LlmConfig): LlmInterpreter
 | `thinking` | 选填，不传则不发送 | OpenAI Chat Completions 的 `reasoning_effort` 字段。传值时原样放入请求体；不传时完全省略，由服务商采用自己的默认强度。 |
 | `systemPrompt` | 选填 | 默认角色文本为「你是一个AI智能助手」。传入自定义文本时，它替换这一段角色文本。库会在两种情况下都追加命令清单和 DSL 输出规则。 |
 
-LLM 重载在创建时检查 `baseUrl`、`apiKey`、`model` 三个必填字段非空，并验证 `baseUrl` 是有效的 HTTP(S) 基址。各实例保有自己的服务配置和命令表。无需调用模型的现有代码可继续用无参重载执行命令字符串。运行时切换服务配置时，可用新的配置对象创建实例并注册同一组命令。[当前实例接口](https://github.com/gyy901/ai-interpreter/blob/main/src/interpreter.ts)
+创建时检查 `baseUrl`、`apiKey`、`model` 三个必填字段非空，并验证 `baseUrl` 是有效的 HTTP(S) 基址；缺少配置对象时同样报配置错误。各实例保有自己的服务配置和命令表。只执行已有命令字符串时不会发起 LLM 请求，但仍需提供合法配置。运行时切换服务配置时，用新的配置对象创建实例并注册同一组命令。[当前实例接口](https://github.com/gyy901/ai-interpreter/blob/main/src/interpreter.ts)
 
 ### 关于 `thinking` 的取值
 
@@ -95,14 +106,14 @@ const { source, result } = await interpreter.run('请回显 hello', context)
 
 ## 实施与验收
 
-1. 在包内新增 LLM 请求和提示词生成逻辑，加入创建函数重载，复用实例注册表和现有执行器。更新公共类型声明（`LlmConfig`、`ReasoningEffort`）和面向 npm 用户的 README，说明配置对象写法与 `reasoning_effort` 取值。
+1. 在包内新增 LLM 请求和提示词生成逻辑，用单一创建函数接收配置，复用实例注册表和现有执行器。更新公共类型声明（`LlmConfig`、`ReasoningEffort`）和面向 npm 用户的 README，说明配置对象写法与 `reasoning_effort` 取值。
 2. 用模拟 Chat Completions 服务验收。核对请求路径、模型 ID、Bearer 鉴权和 `reasoning_effort` 的省略/显式发送行为，以及取值不在 OpenAI 枚举内时创建阶段即报错。检查默认角色、自定义角色、两类注册项和 DSL 格式都正确进入系统消息。创建两个实例验证清单和服务配置隔离。
 3. 用模拟返回的命令完成注册 → 生成 → 执行全链路。验证仅生成命令时 handler 尚未运行，请求失败、空响应和错误语法进入各自的错误路径，未注册命令被拒绝，高风险命令沿用宿主确认。
-4. 执行包内测试和类型检查，打包后在独立消费者项目里通过公共入口验收。验证无参创建与直接执行流程，以及包内生成、执行命令的流程。再使用测试凭证向实际配置的兼容端点执行低风险回显，记录实际连通的供应商和模型。
+4. 执行包内测试和类型检查，打包后在独立消费者项目里通过公共入口验收。验证缺少配置时创建报错、提供配置后直接执行的流程，以及包内生成、执行命令的流程。再使用测试凭证向实际配置的兼容端点执行低风险回显，记录实际连通的供应商和模型。
 
 ## 自测记录
 
 - 包内测试：`npm test` 共 11 项全部通过（原有 4 项 + 新增 7 项 LLM 用例）；`npm run typecheck` 通过。
-- 新增用例覆盖：创建阶段配置校验（必填字段、非法 `baseUrl`、非枚举 `thinking`）；请求路径、模型、Bearer 鉴权、`reasoning_effort` 省略/显式发送；默认与自定义角色文本、根命令参数元数据、实体方法、DSL 规则进入系统消息；仅生成不执行 handler；`run` 全链路与未注册命令、错误语法的失败路径；双实例配置与清单隔离；HTTP 500、空内容、非法 JSON、网络错误、`AbortSignal` 取消。
-- 独立消费者：`npm pack` 后在 `/tmp` 新建项目安装 tarball，通过公共入口完成无参实例直接执行、LLM 实例 `executeCommands`、取消请求冒烟测试；`.ts` 消费者文件对 `LlmConfig`、`ReasoningEffort`、`Interpreter`、`LlmInterpreter`、`GenerateOptions`、`RunResult`、`LlmError` 类型检查通过。
+- 新增用例覆盖：创建阶段配置校验（缺少配置对象、必填字段、非法 `baseUrl`、非枚举 `thinking`）；请求路径、模型、Bearer 鉴权、`reasoning_effort` 省略/显式发送；默认与自定义角色文本、根命令参数元数据、实体方法、DSL 规则进入系统消息；仅生成不执行 handler；`run` 全链路与未注册命令、错误语法的失败路径；双实例配置与清单隔离；HTTP 500、空内容、非法 JSON、网络错误、`AbortSignal` 取消。
+- 独立消费者：`npm pack` 后在 `/tmp` 新建项目安装 tarball，通过公共入口完成缺少配置时创建报错、带配置实例直接执行、取消请求冒烟测试；`.ts` 消费者文件对 `LlmConfig`、`ReasoningEffort`、`Interpreter`、`GenerateOptions`、`RunResult`、`LlmError` 类型检查通过。
 - 真实端点：火山方舟（ARK）`https://ark.cn-beijing.volces.com/api/v3`，模型 `doubao-seed-2-1-turbo-260628`，提示「请回显 hello」返回 `demo.echo('hello')` 并执行成功（`echo:hello`，约 2.2 秒）。未发送 `reasoning_effort`，使用服务商默认强度。

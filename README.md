@@ -21,7 +21,12 @@ npm install ai-interpreter
 ```js
 import { createInterpreter } from 'ai-interpreter'
 
-export const interpreter = createInterpreter()
+const { LLM_BASE_URL: baseUrl, LLM_MODEL: model, LLM_API_KEY: apiKey } = process.env
+if (!baseUrl || !model || !apiKey) {
+  throw new Error('请设置 LLM_BASE_URL、LLM_MODEL 和 LLM_API_KEY')
+}
+
+export const interpreter = createInterpreter({ baseUrl, apiKey, model })
 
 interpreter.registerCommand({
   name: 'demo.echo',
@@ -37,6 +42,8 @@ export const context = {
   confirm: async () => false,
 }
 ```
+
+创建解释器必须传入 LLM 服务配置，创建时会校验 `baseUrl`、`apiKey` 和 `model`。只执行已有命令字符串时不会发起 LLM 请求，但配置仍需合法。可选字段和 `reasoning_effort` 取值见下文「配置 LLM 生成命令」。
 
 把业务逻辑写在 `handler(args, context)` 中。`params` 按位置声明参数，支持 `string`、`number`、`boolean` 和 `object`，默认必填。可用 `required: false` 声明可选参数，用 `enum` 限定取值。将有敏感副作用的命令设为 `risk: 'high'`，并由应用实现 `context.confirm`。示例中的确认函数会拒绝这类命令。
 
@@ -76,17 +83,9 @@ LLM_API_KEY=your-api-key
 
 `LLM_BASE_URL` 填供应商的 API 基址（包含供应商要求的版本路径），请求时去掉末尾斜杠再追加 `/chat/completions`。`LLM_MODEL` 填供应商提供的模型 ID，`LLM_API_KEY` 会作为 Bearer 凭证发送。
 
-创建 `run-with-llm.mjs`，注册命令后用同一个实例生成并执行命令。
+在 `commands.mjs` 的配置对象中按需加入可选字段：
 
 ```js
-import { context } from './commands.mjs'
-import { createInterpreter } from 'ai-interpreter'
-
-const { LLM_BASE_URL: baseUrl, LLM_MODEL: model, LLM_API_KEY: apiKey } = process.env
-if (!baseUrl || !model || !apiKey) {
-  throw new Error('请设置 LLM_BASE_URL、LLM_MODEL 和 LLM_API_KEY')
-}
-
 const interpreter = createInterpreter({
   baseUrl,
   apiKey,
@@ -94,15 +93,12 @@ const interpreter = createInterpreter({
   thinking: 'medium',
   systemPrompt: '你是一个帮助用户操作应用的助手',
 })
+```
 
-interpreter.registerCommand({
-  name: 'demo.echo',
-  signature: "demo.echo('text')",
-  description: '回显传入的文本',
-  params: [{ name: 'text', type: 'string' }],
-  risk: 'low',
-  handler: ([text]) => text,
-})
+创建 `run-with-llm.mjs`，用同一个实例生成并执行命令。
+
+```js
+import { context, interpreter } from './commands.mjs'
 
 const { source, result } = await interpreter.run(process.argv[2] ?? '请回显 hello', context)
 console.log(source) // demo.echo('hello')
@@ -129,14 +125,13 @@ console.log(result.ok, result.message) // true hello
 const source = await interpreter.generateCommands('请回显 hello')
 ```
 
-`generateCommands(input, { signal })` 和 `run(input, context, { signal })` 都支持通过 `AbortSignal` 取消请求。无参创建的 `createInterpreter()` 仍可继续用 `executeCommands` 直接执行命令字符串。
+`generateCommands(input, { signal })` 和 `run(input, context, { signal })` 都支持通过 `AbortSignal` 取消请求。只执行已有命令字符串时使用 `executeCommands`，不会发起 LLM 请求。
 
 ## API 介绍
 
 | API | 用途 |
 | --- | --- |
-| `createInterpreter()` | 创建拥有独立命令表的解释器。注册和执行使用同一个实例。 |
-| `createInterpreter(config)` | 传入 `LlmConfig` 创建带 LLM 能力的解释器。返回值额外提供 `generateCommands` 和 `run`，服务配置与命令表按实例隔离。 |
+| `createInterpreter(config)` | 传入 `LlmConfig` 创建解释器，必须调用。注册、执行和 LLM 生成共享同一实例，服务配置与命令表按实例隔离。 |
 | `interpreter.generateCommands(input, options?)` | 读取当前命令清单拼装系统提示词，请求 LLM 并返回命令字符串，不执行。`options.signal` 可取消请求。 |
 | `interpreter.run(input, context, options?)` | 先调用 `generateCommands`，再用同一实例执行，返回 `{ source, result }`。 |
 | `interpreter.registerCommand(spec)` | 接收 `CommandSpec`，注册根命令。相同 `name` 重复注册会抛错。 |

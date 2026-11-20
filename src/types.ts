@@ -121,7 +121,7 @@ export interface RunResult {
   result: ExecResult
 }
 
-/** 无 LLM 配置的解释器：注册与执行共享同一张命令表 */
+/** 解释器实例：注册并执行命令，也可按自然语言生成命令 */
 export interface Interpreter {
   registerCommand(spec: CommandSpec): void
   registerEntityMethod(spec: EntityMethodSpec): void
@@ -130,10 +130,6 @@ export interface Interpreter {
   listCommands(): CommandSpec[]
   listEntityMethods(): EntityMethodSpec[]
   executeCommands(source: string, ctx: CommandContext): Promise<ExecResult>
-}
-
-/** 带 LLM 配置的解释器：可根据自然语言生成命令并直接执行 */
-export interface LlmInterpreter extends Interpreter {
   /** 组装提示词并请求 LLM，返回命令字符串（不执行） */
   generateCommands(input: string, options?: GenerateOptions): Promise<string>
   /** 生成命令后用同一实例执行，返回生成的命令与执行结果 */

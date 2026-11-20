@@ -40,6 +40,9 @@ function requireText(value: unknown, field: string): string {
 
 /** 创建时校验必填字段与 baseUrl；不合法时抛 LlmError（kind: 'config'） */
 export function normalizeLlmConfig(config: LlmConfig): LlmSettings {
+  if (!config || typeof config !== 'object') {
+    throw new LlmError('config', '创建解释器需要传入 LLM 配置对象')
+  }
   const baseUrl = requireText(config.baseUrl, 'baseUrl')
   const apiKey = requireText(config.apiKey, 'apiKey')
   const model = requireText(config.model, 'model')

@@ -6,30 +6,30 @@
 
 ## 需求
 
-调用方创建解释器时传入 LLM 服务配置，解释器读取当前实例命令清单、拼装系统提示词、请求 OpenAI 兼容 Chat Completions 接口，取得命令字符串并可直接交给现有执行器。业务函数与用户上下文仍由应用提供，无参创建方式保持兼容。
+调用方创建解释器时传入 LLM 服务配置，解释器读取当前实例命令清单、拼装系统提示词、请求 OpenAI 兼容 Chat Completions 接口，取得命令字符串并可直接交给现有执行器。业务函数与用户上下文仍由应用提供。`createInterpreter` 只保留一个签名，必须传配置，实例始终带 LLM 能力，不再提供无参创建和重载。
 
 ## 实施思路
 
 1. 配置校验和提示词生成独立成模块，不侵入注册表与执行器。
-2. `createInterpreter` 用重载区分无参与带配置两种返回类型，带配置实例复用同一张注册表和 `executeWithRegistry`，保证生成、执行看到同一份清单。
+2. `createInterpreter(config)` 为唯一创建入口，实例复用同一张注册表和 `executeWithRegistry`，保证生成、执行看到同一份清单。
 3. LLM 交互只做非流式 `POST /chat/completions`，错误统一收敛为 `LlmError`，按配置、请求、响应三个阶段区分 `kind`。
 4. 请求体默认最小：不传 `thinking` 时不发送 `reasoning_effort`；未做任何服务商私有推理参数映射。
 
 ## 代码改动
 
-- [src/llm.ts](file:///Users/yuyanggao/代码/ai-interpreter/src/llm.ts)：新增 `normalizeLlmConfig`（必填、HTTP(S) 基址、`thinking` 枚举校验）、`buildSystemPrompt`（角色文本 + 根命令及参数元数据 + 实体方法 + DSL 输出规则）、`requestCommands`（Bearer 鉴权、非流式请求、`choices[0].message.content` 提取、错误分类）。
-- [src/types.ts](file:///Users/yuyanggao/代码/ai-interpreter/src/types.ts)：新增 `ReasoningEffort`、`LlmConfig`、`LlmError`、`GenerateOptions`、`RunResult`、`Interpreter`、`LlmInterpreter`。
-- [src/interpreter.ts](file:///Users/yuyanggao/代码/ai-interpreter/src/interpreter.ts)：新增 `createInterpreter(config)` 重载，LLM 实例增加 `generateCommands` 与 `run`；无参行为不变。
+- [src/llm.ts](file:///Users/yuyanggao/代码/ai-interpreter/src/llm.ts)：新增 `normalizeLlmConfig`（配置对象、必填字段、HTTP(S) 基址、`thinking` 枚举校验）、`buildSystemPrompt`（角色文本 + 根命令及参数元数据 + 实体方法 + DSL 输出规则）、`requestCommands`（Bearer 鉴权、非流式请求、`choices[0].message.content` 提取、错误分类）。
+- [src/types.ts](file:///Users/yuyanggao/代码/ai-interpreter/src/types.ts)：新增 `ReasoningEffort`、`LlmConfig`、`LlmError`、`GenerateOptions`、`RunResult`；`Interpreter` 合并生成与执行能力。
+- [src/interpreter.ts](file:///Users/yuyanggao/代码/ai-interpreter/src/interpreter.ts)：`createInterpreter(config)` 单一签名，无重载、无无参分支。
 - [src/index.ts](file:///Users/yuyanggao/代码/ai-interpreter/src/index.ts)：导出新增类型与 `LlmError`。
 - [tsconfig.json](file:///Users/yuyanggao/代码/ai-interpreter/tsconfig.json)：`lib` 增加 `DOM`，为 `fetch`、`Response`、`AbortSignal` 提供类型（运行环境仍使用宿主自带 `fetch`，Node 18+ / 浏览器均可）。
-- [README.md](file:///Users/yuyanggao/代码/ai-interpreter/README.md)：改写 LLM 章节为内置配置用法，补充字段表、`reasoning_effort` 取值说明、错误分类和方法表。
-- [test/interpreter.test.mjs](file:///Users/yuyanggao/代码/ai-interpreter/test/interpreter.test.mjs)：新增 7 项 LLM 用例。
+- [README.md](file:///Users/yuyanggao/代码/ai-interpreter/README.md)：所有创建示例改为必须传入配置，补充字段表、`reasoning_effort` 取值说明、错误分类和方法表。
+- [test/interpreter.test.mjs](file:///Users/yuyanggao/代码/ai-interpreter/test/interpreter.test.mjs)：新增 7 项 LLM 用例，并补充缺少配置时创建报错的断言。
 
 ## 检验结果
 
 - `npm run typecheck`：通过。
 - `npm test`：11 项全部通过（原有 4 项 + 新增 7 项）。
-- 模拟服务覆盖：请求路径与末尾斜杠处理、模型 ID、Bearer 鉴权、`reasoning_effort` 省略/显式发送、创建期配置报错、默认/自定义角色、两类注册项进入系统消息、仅生成不执行 handler、`run` 全链路、未注册命令与语法错误、高风险确认取消、双实例隔离、HTTP 500 / 空内容 / 非法 JSON / 网络错误 / `AbortSignal` 取消。
+- 模拟服务覆盖：缺少配置与非法配置创建报错、请求路径与末尾斜杠处理、模型 ID、Bearer 鉴权、`reasoning_effort` 省略/显式发送、默认/自定义角色、两类注册项进入系统消息、仅生成不执行 handler、`run` 全链路、未注册命令与语法错误、高风险确认取消、双实例隔离、HTTP 500 / 空内容 / 非法 JSON / 网络错误 / `AbortSignal` 取消。
 - 独立消费者：`npm pack` 后在 `/tmp` 新项目安装，公共入口冒烟测试与 `.ts` 类型检查均通过。
 - 真实端点：火山方舟 ARK `https://ark.cn-beijing.volces.com/api/v3`、模型 `doubao-seed-2-1-turbo-260628`，低风险回显全链路成功，耗时约 2.2 秒。
 

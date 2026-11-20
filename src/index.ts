@@ -33,5 +33,4 @@ export {
   type GenerateOptions,
   type RunResult,
   type Interpreter,
-  type LlmInterpreter,
 } from './types.js'
