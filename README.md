@@ -2,7 +2,7 @@
 
 ## 介绍
 
-`ai-interpreter` 是一个 TypeScript 命令解释器。应用把功能注册成命令，再传入 `demo.echo('hello')` 这样的命令字符串，解释器会校验参数、调用对应的处理函数并返回执行结果。命令字符串可以由程序直接提供，也可以由解释器读取当前命令清单、请求 LLM 生成。
+`ai-interpreter` 是一个 TypeScript 命令解释器。应用把功能注册成命令，再用自然语言描述需求，解释器会校验参数、调用对应的处理函数并返回执行结果。
 
 ## 安装命令
 
@@ -43,67 +43,33 @@ export const context = {
 }
 ```
 
-创建解释器必须传入 LLM 服务配置，创建时会校验 `baseUrl`、`apiKey` 和 `model`。只执行已有命令字符串时不会发起 LLM 请求，但配置仍需合法。可选字段和 `reasoning_effort` 取值见下文「配置 LLM 生成命令」。
+创建解释器必须传入 LLM 服务配置，创建时会校验 `baseUrl`、`apiKey` 和 `model`。可选字段和 `reasoning_effort` 取值见下文「配置 LLM 生成命令」。
 
 把业务逻辑写在 `handler(args, context)` 中。`params` 按位置声明参数，支持 `string`、`number`、`boolean` 和 `object`，默认必填。可用 `required: false` 声明可选参数，用 `enum` 限定取值。将有敏感副作用的命令设为 `risk: 'high'`，并由应用实现 `context.confirm`。示例中的确认函数会拒绝这类命令。
 
-### 执行命令字符串
+### 执行自然语言请求
 
 创建 `run.mjs`，用同一个解释器执行命令。
 
 ```js
 import { context, interpreter } from './commands.mjs'
 
-const source = process.argv[2] ?? "demo.echo('hello')"
-const result = await interpreter.executeCommands(source, context)
+const source = process.argv[2] ?? "hello"
+const result = await interpreter.run(source, context)
 
 console.log(result.ok, result.message)
-if (!result.ok) process.exitCode = 1
+
 ```
 
 ```sh
 node run.mjs
 # true hello
 
-node run.mjs 'demo.echo(123)'
-# false 参数「text」应为字符串
+node run.mjs 'who are you'
+# true I'm a helpful assistant.
 ```
 
-多条命令用英文分号分隔，例如 `demo.echo('first'); demo.echo('second')`。解释器按顺序执行，遇到失败或取消就停止，前面已发生的副作用会保留。
 
-### 配置 LLM 生成命令
-
-创建解释器时传入 LLM 服务配置，解释器会读取当前实例的命令清单、拼装系统提示词，并请求 OpenAI 兼容的 Chat Completions 接口，返回可执行命令字符串。将服务配置写入应用的 `.env`，并将该文件加入 `.gitignore`。
-
-```dotenv
-LLM_BASE_URL=https://provider.example/v1
-LLM_MODEL=your-model-id
-LLM_API_KEY=your-api-key
-```
-
-`LLM_BASE_URL` 填供应商的 API 基址（包含供应商要求的版本路径），请求时去掉末尾斜杠再追加 `/chat/completions`。`LLM_MODEL` 填供应商提供的模型 ID，`LLM_API_KEY` 会作为 Bearer 凭证发送。
-
-在 `commands.mjs` 的配置对象中按需加入可选字段：
-
-```js
-const interpreter = createInterpreter({
-  baseUrl,
-  apiKey,
-  model,
-  thinking: 'medium',
-  systemPrompt: '你是一个帮助用户操作应用的助手',
-})
-```
-
-创建 `run-with-llm.mjs`，用同一个实例生成并执行命令。
-
-```js
-import { context, interpreter } from './commands.mjs'
-
-const { source, result } = await interpreter.run(process.argv[2] ?? '请回显 hello', context)
-console.log(source) // demo.echo('hello')
-console.log(result.ok, result.message) // true hello
-```
 
 配置对象使用命名参数，字段如下：
 
